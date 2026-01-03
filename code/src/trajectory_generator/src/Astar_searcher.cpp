@@ -201,9 +201,15 @@ inline void Astarpath::AstarGetSucc(MappingNodePtr currentPtr,
 
 double Astarpath::getHeu(MappingNodePtr node1, MappingNodePtr node2) {
   
-  // 使用数字距离和一种类型的tie_breaker
-  double heu;
-  double tie_breaker;
+  // 使用欧几里得距离作为启发式函数
+  double dx = node1->coord(0) - node2->coord(0);
+  double dy = node1->coord(1) - node2->coord(1);
+  double dz = node1->coord(2) - node2->coord(2);
+  double heu = sqrt(dx*dx + dy*dy + dz*dz);
+  
+  // Tiebreaker: 略微放大启发式值，打破平局
+  double tie_breaker = 1.0 + 1.0 / 10000.0;
+  heu = heu * tie_breaker;
   
   return heu;
 }
@@ -260,12 +266,21 @@ bool Astarpath::AstarSearch(Vector3d start_pt, Vector3d end_pt) {
    * **/
 
   while (!Openset.empty()) {
-    //1.弹出g+h最小的节点
-    //????
-    //2.判断是否是终点
-    //????
-    //3.拓展当前节点
-    //????
+    // 1. 弹出 g+h 最小的节点
+    currentPtr = Openset.begin()->second;
+    Openset.erase(Openset.begin());
+    currentPtr->id = -1;  // 移入 Closed List
+    
+    // 2. 判断是否是终点
+    if (currentPtr->index == goalIdx) {
+      terminatePtr = currentPtr;
+      ROS_WARN("[A*] Goal reached!");
+      return true;
+    }
+    
+    // 3. 扩展当前节点，获取邻居
+    AstarGetSucc(currentPtr, neighborPtrSets, edgeCostSets);
+    
     for(unsigned int i=0;i<neighborPtrSets.size();i++)
     {
       
@@ -279,13 +294,23 @@ bool Astarpath::AstarSearch(Vector3d start_pt, Vector3d end_pt) {
       continue;
       if(neighborPtr->id==0)
       {
-        //4.填写信息，完成更新
-        //???
+        // 4. 新节点：填写信息，加入 Open List
+        neighborPtr->g_score = tentative_g_score;
+        neighborPtr->f_score = tentative_g_score + getHeu(neighborPtr, endPtr);
+        neighborPtr->Father = currentPtr;
+        neighborPtr->id = 1;
+        Openset.insert(make_pair(neighborPtr->f_score, neighborPtr));
         continue;
       }
       else if(neighborPtr->id==1)
       {
-        //???
+        // 已在 Open List：检查是否需要更新
+        if(neighborPtr->g_score > tentative_g_score){
+          neighborPtr->g_score = tentative_g_score;
+          neighborPtr->Father = currentPtr;
+          neighborPtr->f_score = tentative_g_score + getHeu(neighborPtr, endPtr);
+          Openset.insert(make_pair(neighborPtr->f_score, neighborPtr));
+        }
       continue;
       }
     }
@@ -314,7 +339,17 @@ terminatePtr=terminatePtr->Father;
    *
    * **/
 
-  // ???
+  // 将起点也加入路径
+  terminatePtr->coord = gridIndex2coord(terminatePtr->index);
+  front_path.push_back(terminatePtr);
+  
+  // 反转路径（从终点到起点 -> 从起点到终点）
+  reverse(front_path.begin(), front_path.end());
+  
+  // 提取坐标向量
+  for(const auto& node : front_path) {
+    path.push_back(node->coord);
+  }
 
   return path;
 }
