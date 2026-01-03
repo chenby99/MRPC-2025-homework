@@ -78,6 +78,26 @@ SO3Control::calculateControl(const Eigen::Vector3d& des_pos,
     mass_ * ka.asDiagonal() * (des_acc - acc_) +
     mass_ * g_ * Eigen::Vector3d(0, 0, 1);
 
+  // ========== 额外调试数据（保存到debug目录）==========
+  Eigen::Vector3d pos_err = des_pos - pos_;
+  Eigen::Vector3d vel_err = des_vel - vel_;
+  
+  if(!debugFile.is_open()){
+    debugFile.open("/home/bonnie/File/noetic_ws/MRPC-2025-homework/code/debug/control_debug.txt", std::ios::out|std::ios::trunc);
+    debugFile << "# time des_x des_y des_z pos_x pos_y pos_z des_vx des_vy des_vz vel_x vel_y vel_z err_x err_y err_z verr_x verr_y verr_z force_x force_y force_z kx0 kx1 kx2 kv0 kv1 kv2\n";
+  }
+  debugFile << currentTime << " ";
+  debugFile << des_pos(0) << " " << des_pos(1) << " " << des_pos(2) << " ";
+  debugFile << pos_(0) << " " << pos_(1) << " " << pos_(2) << " ";
+  debugFile << des_vel(0) << " " << des_vel(1) << " " << des_vel(2) << " ";
+  debugFile << vel_(0) << " " << vel_(1) << " " << vel_(2) << " ";
+  debugFile << pos_err(0) << " " << pos_err(1) << " " << pos_err(2) << " ";
+  debugFile << vel_err(0) << " " << vel_err(1) << " " << vel_err(2) << " ";
+  debugFile << force_(0) << " " << force_(1) << " " << force_(2) << " ";
+  debugFile << kx(0) << " " << kx(1) << " " << kx(2) << " ";
+  debugFile << kv(0) << " " << kv(1) << " " << kv(2) << "\n";
+  // ========== 额外调试数据结束 ==========
+
   // Limit control angle to 45 degree
   double          theta = M_PI / 2;
   double          c     = cos(theta);

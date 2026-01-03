@@ -25,6 +25,7 @@ public:
   const Eigen::Quaterniond& getComputedOrientation(void);
   std::ofstream dataFile;
   std::ofstream dataFile_time;
+  std::ofstream debugFile;  // 额外的调试数据文件
 
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
