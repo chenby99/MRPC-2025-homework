@@ -355,57 +355,89 @@ terminatePtr=terminatePtr->Father;
 }
 
 
+// 检查线段是否与障碍物碰撞
+bool Astarpath::segmentCollisionFree(const Eigen::Vector3d &start, const Eigen::Vector3d &end) {
+  Eigen::Vector3d direction = end - start;
+  double distance = direction.norm();
+  
+  if (distance < 1e-6) return true;
+  
+  // 采样步长（比栅格分辨率更小以确保精度）
+  double step = resolution * 0.5;
+  int num_steps = static_cast<int>(distance / step) + 1;
+  
+  Eigen::Vector3d unit_dir = direction.normalized();
+  
+  for (int i = 0; i <= num_steps; i++) {
+    Eigen::Vector3d point = start + unit_dir * (i * step);
+    Eigen::Vector3i idx = coord2gridIndex(point);
+    
+    if (isOccupied(idx)) {
+      return false;  // 有障碍物
+    }
+  }
+  return true;  // 无障碍物
+}
+
 std::vector<Vector3d> Astarpath::pathSimplify(const vector<Vector3d> &path,
                                                double path_resolution) {
+  if (path.size() <= 2) {
+    return path;
+  }
 
-  //init
-  double dmax=0,d;
-  int index=0;
-  int end = path.size();
-  //1.计算距离首尾连成直线最大的点，并将点集从此处分开
-  for(int i=1;i<end-1;i++)
-  {
-    d=perpendicularDistance(path[i],path[0],path[end-1]);
-    if(d>dmax)
-    {
-      index=i;
-      dmax=d;
-    }
-  }
-  vector<Vector3d> subPath1;
-  int j = 0;
-  while(j<index+1){
-    subPath1.push_back(path[j]);
-    j++;
-  }
-  vector<Vector3d> subPath2;
-   while(j<int(path.size())){
-    subPath2.push_back(path[j]);
-    j++;
-  }
-  //2.拆分点集
-  vector<Vector3d> recPath1;
-  vector<Vector3d> recPath2;
-  vector<Vector3d> resultPath;
-  if(dmax>path_resolution)
-  {
-    recPath1=pathSimplify(subPath1,path_resolution);
-    recPath2=pathSimplify(subPath2,path_resolution);
-   for(int i=0;i<int(recPath1.size());i++){
-    resultPath.push_back(recPath1[i]);
-  }
-     for(int i=0;i<int(recPath2.size());i++){
-    resultPath.push_back(recPath2[i]);
-  }
-  }else{
-    if(path.size()>1){
-      resultPath.push_back(path[0]);
-      resultPath.push_back(path[end-1]);
-    }else{
-      resultPath.push_back(path[0]);
-    }
+  // 限制最大跳跃距离，防止多项式轨迹偏离过大
+  const double MAX_SEGMENT_LENGTH = 2.0;  // 最大线段长度（米）
+  const size_t MAX_LOOK_AHEAD = 10;       // 每次最多跳过的点数
+
+  // First pass: line-of-sight pruning with distance constraint
+  std::vector<Vector3d> los_path;
+  los_path.reserve(path.size());
+  los_path.push_back(path.front());
+
+  size_t anchor = 0;
+  while (anchor + 1 < path.size()) {
+    size_t candidate = anchor + 1;
+    size_t max_idx = std::min(anchor + MAX_LOOK_AHEAD, path.size() - 1);
     
+    for (size_t i = anchor + 1; i <= max_idx; ++i) {
+      double dist = (path[i] - path[anchor]).norm();
+      // 只有在距离限制内且无碰撞时才延长
+      if (dist <= MAX_SEGMENT_LENGTH && segmentCollisionFree(path[anchor], path[i])) {
+        candidate = i;
+      } else if (dist > MAX_SEGMENT_LENGTH) {
+        // 超过最大距离，停止搜索
+        break;
+      } else {
+        // 碰撞，停止搜索
+        break;
+      }
+    }
+
+    los_path.push_back(path[candidate]);
+    anchor = candidate;
   }
+
+  // Second pass: remove nearly collinear points while respecting obstacle check
+  std::vector<Vector3d> resultPath;
+  resultPath.reserve(los_path.size());
+  resultPath.push_back(los_path.front());
+
+  for (size_t i = 1; i + 1 < los_path.size(); ++i) {
+    double d = perpendicularDistance(los_path[i], los_path[i - 1], los_path[i + 1]);
+    double segment_len = (los_path[i + 1] - los_path[i - 1]).norm();
+    
+    // 保留条件：垂直距离大于阈值，或者跳过会碰撞，或者线段太长
+    if (d > path_resolution || 
+        segment_len > MAX_SEGMENT_LENGTH ||
+        !segmentCollisionFree(los_path[i - 1], los_path[i + 1])) {
+      resultPath.push_back(los_path[i]);
+    }
+  }
+
+  resultPath.push_back(los_path.back());
+  
+  ROS_INFO("[Path Simplify] Original: %lu -> LOS: %lu -> Final: %lu points", 
+           path.size(), los_path.size(), resultPath.size());
 
   return resultPath;
 }

@@ -60,6 +60,8 @@ class Astarpath
 		int safeCheck( Eigen::MatrixXd polyCoeff, Eigen::VectorXd time);
 		double perpendicularDistance(const Eigen::Vector3d point_insert,const Eigen::Vector3d point_st,const Eigen::Vector3d point_end);
         void resetOccupy();
+		// 线段碰撞检测
+		bool segmentCollisionFree(const Eigen::Vector3d &start, const Eigen::Vector3d &end);
 };
 
 

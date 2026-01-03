@@ -269,6 +269,7 @@ bool trajGeneration() {
   }
   visPathA(path);
 
+  // 使用改进的路径简化（包含视线剪枝+共线点移除）
   grid_path = _astar_path_finder->pathSimplify(grid_path, _path_resolution);
   // grid_path = _astar_path_finder->getPath();
   path=MatrixXd::Zero(int(grid_path.size()), 3);
@@ -429,7 +430,26 @@ VectorXd timeAllocation(MatrixXd Path) {
         time(i) =2.0 * t + (dist - 2.0 * d) / _Vel;
     }
  }
-  return 2*time;
+  // 依据转角曲率进行时间放大，转角越尖锐越放慢
+  if (Path.rows() >= 3) {
+    for (int i = 0; i < time.size(); ++i) {
+      double factor = 1.0;
+      if (i > 0 && i + 1 < Path.rows()) {
+        Eigen::Vector3d v1 = (Path.row(i) - Path.row(i - 1)).transpose();
+        Eigen::Vector3d v2 = (Path.row(i + 1) - Path.row(i)).transpose();
+        double n1 = v1.norm();
+        double n2 = v2.norm();
+        if (n1 > 1e-6 && n2 > 1e-6) {
+          double cosang = std::max(-1.0, std::min(1.0, v1.dot(v2) / (n1 * n2)));
+          double sharp = 1.0 - cosang; // 直线0，直角~1，折返~2
+          // 放大系数，限制在 [1, 1.8]
+          factor = std::min(1.8, 1.0 + 0.6 * sharp);
+        }
+      }
+      time(i) *= factor;
+    }
+  }
+  return time;
 }
 
 void visTrajectory(MatrixXd polyCoeff, VectorXd time) {
