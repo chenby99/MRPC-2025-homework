@@ -296,7 +296,7 @@ void issafe(const ros::TimerEvent &e){
       ROS_WARN("now place is in obstacle, the drone has cracked!!!");
       cracked = true;
       if(!dataFiles.is_open()){
-        dataFiles.open("/home/stuwork/MRPC-2025-homework/code/src/quadrotor_simulator/so3_control/src/issafe.txt", std::ios::out|std::ios::trunc);
+        dataFiles.open("/home/bonnie/File/noetic_ws/MRPC-2025-homework/code/src/quadrotor_simulator/so3_control/src/issafe.txt", std::ios::out|std::ios::trunc);
       }
       dataFiles << 1;
       dataFiles.flush();
@@ -630,7 +630,7 @@ int main(int argc, char **argv) {
   time_Count=0;
   target_Count = 0;
   
-  std::string issafe_path = "/home/stuwork/MRPC-2025-homework/code/src/quadrotor_simulator/so3_control/src/issafe.txt";
+  std::string issafe_path = "/home/bonnie/File/noetic_ws/MRPC-2025-homework/code/src/quadrotor_simulator/so3_control/src/issafe.txt";
   std::ofstream clear_file(issafe_path, std::ios::out | std::ios::trunc);
   clear_file.close();
 

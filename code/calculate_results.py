@@ -7,7 +7,8 @@ def calculate_rmse_and_more():
     time_stamps2 = []
     length_increments = []
 
-    with open("/home/stuwork/MRPC-2025-homework/code/src/quadrotor_simulator/so3_control/src/control_data.txt", "r") as file:
+    # with open("/home/bonnie/File/noetic_ws/MRPC-2025-homework/code/src/quadrotor_simulator/so3_control/src/control_data.txt", "r") as file:
+    with open("/home/bonnie/File/noetic_ws/MRPC-2025-homework/code/src/quadrotor_simulator/so3_control/src/control_data.txt", "r") as file:
         lines = file.readlines()
         for i, line in enumerate(lines):
             data = line.strip().split()
@@ -33,7 +34,7 @@ def calculate_rmse_and_more():
     if des_pos_array.shape!= pos_array.shape:
         raise ValueError("期望位置数据和实际位置数据的形状不一致。")
     
-    with open("/home/stuwork/MRPC-2025-homework/code/src/quadrotor_simulator/so3_control/src/control_timedata.txt", "r") as file:
+    with open("/home/bonnie/File/noetic_ws/MRPC-2025-homework/code/src/quadrotor_simulator/so3_control/src/control_timedata.txt", "r") as file:
         lines = file.readlines()
         for i, line in enumerate(lines):
             datatime = line.strip().split()
@@ -60,7 +61,7 @@ def calculate_rmse_and_more():
     
     return rmse, total_time, total_length, additional_score, overall_score
 def check_additional_file():
-    file_path = "/home/stuwork/MRPC-2025-homework/code/src/quadrotor_simulator/so3_control/src/issafe.txt"  # 替换为实际的文件路径
+    file_path = "/home/bonnie/File/noetic_ws/MRPC-2025-homework/code/src/quadrotor_simulator/so3_control/src/issafe.txt"  # 替换为实际的文件路径
     try:
         with open(file_path, "r") as file:
             content = file.read().strip()
@@ -79,7 +80,8 @@ if __name__ == "__main__":
         print(f"是否发生了碰撞: {additional_score}")
         print(f"综合评价得分为(综合分数越低越好): {overall_score}")
         
-        result_file_path = "/home/stuwork/MRPC-2025-homework/solutions/result.txt"
+        result_file_path = "/home/bonnie/File/noetic_ws/MRPC-2025-homework/solutions/result.txt"
+        os.makedirs("/home/bonnie/File/noetic_ws/MRPC-2025-homework/solutions/", exist_ok=True)
         with open(result_file_path, "w") as f:
             f.write(f"{rmse} {total_time} {total_length} {additional_score} {overall_score}")
     except ValueError as e:
