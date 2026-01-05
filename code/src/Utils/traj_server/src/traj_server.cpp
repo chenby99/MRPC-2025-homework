@@ -213,7 +213,11 @@ public:
             _traj_flag = quadrotor_msgs::PositionCommand::TRAJECTORY_STATUS_READY;
             _traj_id = traj.trajectory_id;
             _n_segment = traj.num_segment;
-            _final_time = _start_time = traj.header.stamp;
+            // 关键修复：使用最新的odom时间戳作为轨迹起始时间
+            // 这样下一次odom回调时，t会非常接近0，从轨迹起点开始执行
+            // 避免重规划时跳到轨迹中间某个点导致的位置跳变
+            _start_time = _odom.header.stamp;
+            _final_time = _start_time;
             _time.resize(_n_segment);
 
             _order.clear();

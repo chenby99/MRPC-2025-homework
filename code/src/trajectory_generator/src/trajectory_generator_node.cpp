@@ -49,7 +49,9 @@ ros::Subscriber _map_sub, _pts_sub, _odom_sub;
 ros::Publisher _traj_vis_pub, _traj_before_vis_pub,_traj_pub, _path_vis_pub,_astar_path_vis_pub;
 
 // for planning
-Vector3d odom_pt, odom_vel, start_pt, target_pt, start_vel;
+Vector3d odom_pt, odom_vel, start_pt, target_pt, start_vel, start_acc;
+Vector3d odom_vel_prev = Vector3d::Zero();  // 上一时刻的速度，用于计算加速度
+ros::Time odom_time_prev = ros::Time(0);      // 上一时刻的时间戳
 int _poly_num1D;
 MatrixXd _polyCoeff;
 VectorXd _polyTime;
@@ -93,6 +95,7 @@ bool trajGeneration();
 VectorXd timeAllocation(MatrixXd Path);
 Vector3d getPos(double t_cur);
 Vector3d getVel(double t_cur);
+Vector3d getAcc(double t_cur);
 
 // change the state to the new state
 void changeState(STATE new_state, string pos_call) {
@@ -116,10 +119,26 @@ void rcvOdomCallback(const nav_msgs::Odometry::ConstPtr &odom) {
   odom_pt(1) = odom->pose.pose.position.y;
   odom_pt(2) = odom->pose.pose.position.z;
 
-  odom_vel(0) = odom->twist.twist.linear.x;
-  odom_vel(1) = odom->twist.twist.linear.y;
-  odom_vel(2) = odom->twist.twist.linear.z;
-
+  Vector3d odom_vel_new;
+  odom_vel_new(0) = odom->twist.twist.linear.x;
+  odom_vel_new(1) = odom->twist.twist.linear.y;
+  odom_vel_new(2) = odom->twist.twist.linear.z;
+  
+  // 计算实际加速度（速度变化率）
+  if (has_odom && odom_time_prev.toSec() > 0) {
+    double dt = (odom->header.stamp - odom_time_prev).toSec();
+    if (dt > 0.001 && dt < 0.5) {  // 合理的时间间隔
+      Vector3d odom_acc = (odom_vel_new - odom_vel_prev) / dt;
+      // 平滑滤波，避免噪声
+      static Vector3d odom_acc_filtered = Vector3d::Zero();
+      odom_acc_filtered = 0.7 * odom_acc_filtered + 0.3 * odom_acc;
+      start_acc = odom_acc_filtered;
+    }
+  }
+  
+  odom_vel = odom_vel_new;
+  odom_vel_prev = odom_vel_new;
+  odom_time_prev = odom->header.stamp;
   has_odom = true;
 }
 
@@ -188,12 +207,11 @@ void execCallback(const ros::TimerEvent &e) {
     break;
   }
   case REPLAN_TRAJ: {
-    ros::Time time_now = ros::Time::now();
-    double t_cur = (time_now - time_traj_start).toSec();
-    double t_delta = ros::Duration(0, 50).toSec();
-    t_cur = t_delta + t_cur;
-    start_pt = getPos(t_cur);
-    start_vel = getVel(t_cur);
+    // 关键修复：重规划时应该从无人机的实际位置、速度、加速度开始
+    // 确保新轨迹与当前状态完全连续，避免跳变和抖动
+    start_pt = odom_pt;
+    start_vel = odom_vel;
+    // start_acc 已经在 rcvOdomCallback 中实时计算好了
     bool success = trajGeneration();
     if (success)
       changeState(EXEC_TRAJ, "STATE");
@@ -222,6 +240,7 @@ void rcvWaypointsCallBack(const nav_msgs::Path &wp) {
   ROS_INFO("[node] receive the planning target");
   start_pt = odom_pt;
   start_vel = odom_vel;
+  start_acc = Vector3d::Zero();
   has_target = true;
 
   if (exec_state == WAIT_TARGET)
@@ -254,6 +273,9 @@ void rcvPointCloudCallBack(const sensor_msgs::PointCloud2 &pointcloud_map) {
 
 bool trajGeneration() {
 
+  // 保存精确的起点位置（重规划时非常重要！）
+  Vector3d exact_start_pt = start_pt;
+  
   bool astar_success =_astar_path_finder->AstarSearch(start_pt, target_pt);
 
   if(!astar_success){
@@ -263,6 +285,13 @@ bool trajGeneration() {
       auto grid_path = _astar_path_finder->getPath();
   // Reset map for next call
       _astar_path_finder->resetUsedGrids();
+  
+  // 关键修复：将A*返回的第一个点（网格中心）替换为精确起点
+  // 避免重规划时位置不连续导致的抖动
+  if (grid_path.size() > 0) {
+    grid_path[0] = exact_start_pt;
+  }
+  
   MatrixXd path(int(grid_path.size()), 3);
   for (int k = 0; k < int(grid_path.size()); k++) {
     path.row(k) = grid_path[k].transpose();
@@ -272,6 +301,12 @@ bool trajGeneration() {
   // 使用改进的路径简化（包含视线剪枝+共线点移除）
   grid_path = _astar_path_finder->pathSimplify(grid_path, _path_resolution);
   // grid_path = _astar_path_finder->getPath();
+  
+  // 再次确保简化后的路径第一个点是精确起点
+  if (grid_path.size() > 0) {
+    grid_path[0] = exact_start_pt;
+  }
+  
   path=MatrixXd::Zero(int(grid_path.size()), 3);
   for (int k = 0; k < int(grid_path.size()); k++) {
     path.row(k) = grid_path[k].transpose();
@@ -312,7 +347,7 @@ void trajOptimization(Eigen::MatrixXd path) {
   MatrixXd acc = MatrixXd::Zero(2, 3);//首末速度和加速度
   vel.row(0) = start_vel.transpose();
   vel.row(1) <<0,0,0;
-  acc.row(0) <<0,0,0;
+  acc.row(0) = start_acc.transpose();
   acc.row(1) <<0,0,0;
   
   _polyTime = timeAllocation(path);
@@ -597,33 +632,54 @@ void visPathA(MatrixXd nodes) {
 }
 
 Vector3d getPos(double t_cur) {
-  double time = 0;
+  double time_sum = 0.0;
   Vector3d pos = Vector3d::Zero();
   for (int i = 0; i < _polyTime.size(); i++) {
-    for (double t = 0.0; t < _polyTime(i); t += 0.01) {
-      time = time + 0.01;
-      if (time > t_cur) {
-        pos = _trajGene->getPosPoly(_polyCoeff, i, t);
-        return pos;
-      }
+    if (time_sum + _polyTime(i) >= t_cur) {
+      // 找到了对应的段，计算段内时间
+      double t_in_segment = t_cur - time_sum;
+      pos = _trajGene->getPosPoly(_polyCoeff, i, t_in_segment);
+      return pos;
     }
+    time_sum += _polyTime(i);
+  }
+  // 超出轨迹时间，返回终点位置
+  if (_polyTime.size() > 0) {
+    pos = _trajGene->getPosPoly(_polyCoeff, _polyTime.size()-1, _polyTime(_polyTime.size()-1));
   }
   return pos;
 }
 
 Vector3d getVel(double t_cur) {
-  double time = 0;
+  double time_sum = 0.0;
   Vector3d Vel = Vector3d::Zero();
   for (int i = 0; i < _polyTime.size(); i++) {
-    for (double t = 0.0; t < _polyTime(i); t += 0.01) {
-      time = time + 0.01;
-      if (time > t_cur) {
-        Vel = _trajGene->getVelPoly(_polyCoeff, i, t);
-        return Vel;
-      }
+    if (time_sum + _polyTime(i) >= t_cur) {
+      // 找到了对应的段，计算段内时间
+      double t_in_segment = t_cur - time_sum;
+      Vel = _trajGene->getVelPoly(_polyCoeff, i, t_in_segment);
+      return Vel;
     }
+    time_sum += _polyTime(i);
   }
+  // 超出轨迹时间，返回终点速度（应该是0）
   return Vel;
+}
+
+Vector3d getAcc(double t_cur) {
+  double time_sum = 0.0;
+  Vector3d Acc = Vector3d::Zero();
+  for (int i = 0; i < _polyTime.size(); i++) {
+    if (time_sum + _polyTime(i) >= t_cur) {
+      // 找到了对应的段，计算段内时间
+      double t_in_segment = t_cur - time_sum;
+      Acc = _trajGene->getAccPoly(_polyCoeff, i, t_in_segment);
+      return Acc;
+    }
+    time_sum += _polyTime(i);
+  }
+  // 超出轨迹时间，返回终点加速度（应该是0）
+  return Acc;
 }
 
 int main(int argc, char **argv) {
