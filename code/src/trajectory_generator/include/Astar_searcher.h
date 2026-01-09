@@ -24,9 +24,10 @@ class Astarpath
 		double gl_xl, gl_yl, gl_zl;
 		double gl_xu, gl_yu, gl_zu;
 
-		MappingNodePtr terminatePtr;
-		std::multimap<double, MappingNodePtr> Openset;
-
+	// Z轴权重参数，用于偏好平面飞行
+	double z_weight_lambda;
+	MappingNodePtr terminatePtr;
+	std::multimap<double, MappingNodePtr> Openset;
 		double getHeu(MappingNodePtr node1, MappingNodePtr node2);
 		void AstarGetSucc(MappingNodePtr currentPtr, std::vector<MappingNodePtr> & neighborPtrSets, std::vector<double> & edgeCostSets);		
 		Eigen::Vector3d gridIndex2coord(const Eigen::Vector3i & index);

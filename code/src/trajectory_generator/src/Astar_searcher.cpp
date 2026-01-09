@@ -23,6 +23,9 @@ void Astarpath::begin_grid_map(double _resolution, Vector3d global_xyz_l,
   resolution = _resolution;
   inv_resolution = 1.0 / _resolution;
 
+  // 初始化 Z 轴权重参数（lambda > 1 使得 Z 轴移动代价更高）
+  z_weight_lambda = 2.0;  // 可根据需要调整
+
   data = new uint8_t[GLXYZ_SIZE];
   memset(data, 0, GLXYZ_SIZE * sizeof(uint8_t));
 
@@ -193,7 +196,10 @@ inline void Astarpath::AstarGetSucc(MappingNodePtr currentPtr,
 
         neighborPtrSets.push_back(
             Map_Node[Idx_neighbor(0)][Idx_neighbor(1)][Idx_neighbor(2)]);
-        edgeCostSets.push_back(sqrt(dx * dx + dy * dy + dz * dz));
+        
+        // 修改边权重：对 Z 轴分量进行加权
+        double weighted_dz = z_weight_lambda * dz;
+        edgeCostSets.push_back(sqrt(dx * dx + dy * dy + weighted_dz * weighted_dz));
       }
     }
   }
@@ -205,7 +211,10 @@ double Astarpath::getHeu(MappingNodePtr node1, MappingNodePtr node2) {
   double dx = node1->coord(0) - node2->coord(0);
   double dy = node1->coord(1) - node2->coord(1);
   double dz = node1->coord(2) - node2->coord(2);
-  double heu = sqrt(dx*dx + dy*dy + dz*dz);
+  
+  // 修改启发式：对 Z 轴距离差进行加权
+  double weighted_dz = z_weight_lambda * dz;
+  double heu = sqrt(dx*dx + dy*dy + weighted_dz*weighted_dz);
   
   // Tiebreaker: 略微放大启发式值，打破平局
   double tie_breaker = 1.0 + 1.0 / 10000.0;
@@ -387,7 +396,7 @@ std::vector<Vector3d> Astarpath::pathSimplify(const vector<Vector3d> &path,
 
   // 限制最大跳跃距离，防止多项式轨迹偏离过大
   const double MAX_SEGMENT_LENGTH = 2.0;  // 最大线段长度（米）
-  const size_t MAX_LOOK_AHEAD = 10;       // 每次最多跳过的点数
+  const size_t MAX_LOOK_AHEAD = 15;       // 每次最多跳过的点数
 
   // First pass: line-of-sight pruning with distance constraint
   std::vector<Vector3d> los_path;
