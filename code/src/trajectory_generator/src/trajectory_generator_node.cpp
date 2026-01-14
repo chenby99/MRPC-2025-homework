@@ -206,23 +206,43 @@ void execCallback(const ros::TimerEvent &e) {
     }
     break;
   }
+  
+  // 【!!!】重点修改部分：解决重规划抖动的核心逻辑
   case REPLAN_TRAJ: {
-    // 关键修复：重规划时应该从无人机的实际位置、速度、加速度开始
-    // 确保新轨迹与当前状态完全连续，避免跳变和抖动
-    start_pt = odom_pt;
-    start_vel = odom_vel;
-    // start_acc 已经在 rcvOdomCallback 中实时计算好了
+    // 定义一个静态变量来标记是否是"第一次"重规划
+    static bool is_first_replan = true;
+
+    // 如果是第一次，给它 200ms (0.2s) 的充足时间计算
+    // 后面热身完了，再恢复到 30ms (0.03s) 的极速模式
+    double delay_time = is_first_replan ? 0.2 : 0.03; 
+
+    ros::Time now = ros::Time::now();
+    double t_cur = (now - time_traj_start).toSec();
+    double t_future = t_cur + delay_time;
+    
+    // ... (中间取 getPos/Vel/Acc 的代码保持不变) ...
+    t_future = std::min(time_duration, t_future); 
+    start_pt  = getPos(t_future);
+    start_vel = getVel(t_future);
+    start_acc = getAcc(t_future);
+
     bool success = trajGeneration();
-    if (success)
+    
+    if (success) {
+      time_traj_start = now + ros::Duration(delay_time);
       changeState(EXEC_TRAJ, "STATE");
-    else
+      
+      // 成功执行后，标记第一次已经结束
+      is_first_replan = false; 
+    } else {
       changeState(GEN_NEW_TRAJ, "STATE");
+    }
     break;
   }
 
   case EMER_STOP: {
     // ROS_ERROR("YOUR DRONE HAS CRACKED!!!!");
-    
+    break;
   }
   }
 }
@@ -238,6 +258,8 @@ void rcvWaypointsCallBack(const nav_msgs::Path &wp) {
     target_pt << 0, 0, 5;
   }
   ROS_INFO("[node] receive the planning target");
+  
+  // 初始规划可以用 odom 作为起点
   start_pt = odom_pt;
   start_vel = odom_vel;
   start_acc = Vector3d::Zero();
@@ -252,7 +274,6 @@ void rcvWaypointsCallBack(const nav_msgs::Path &wp) {
 void rcvPointCloudCallBack(const sensor_msgs::PointCloud2 &pointcloud_map) {
 
   pcl::PointCloud<pcl::PointXYZ> cloud;
-  pcl::PointCloud<pcl::PointXYZ> cloud_vis;
   sensor_msgs::PointCloud2 map_vis;
 
  _astar_path_finder->resetOccupy();//新的一帧点云到来，需将占据容器清零；
@@ -273,7 +294,6 @@ void rcvPointCloudCallBack(const sensor_msgs::PointCloud2 &pointcloud_map) {
 
 bool trajGeneration() {
 
-  // 保存精确的起点位置（重规划时非常重要！）
   Vector3d exact_start_pt = start_pt;
   
   bool astar_success =_astar_path_finder->AstarSearch(start_pt, target_pt);
@@ -282,12 +302,11 @@ bool trajGeneration() {
      _astar_path_finder->resetUsedGrids();
     return false;
     }
-      auto grid_path = _astar_path_finder->getPath();
-  // Reset map for next call
-      _astar_path_finder->resetUsedGrids();
   
-  // 关键修复：将A*返回的第一个点（网格中心）替换为精确起点
-  // 避免重规划时位置不连续导致的抖动
+  auto grid_path = _astar_path_finder->getPath();
+  _astar_path_finder->resetUsedGrids();
+  
+  // 确保第一个点对齐
   if (grid_path.size() > 0) {
     grid_path[0] = exact_start_pt;
   }
@@ -298,11 +317,10 @@ bool trajGeneration() {
   }
   visPathA(path);
 
-  // 使用改进的路径简化（包含视线剪枝+共线点移除）
+  // 路径简化
   grid_path = _astar_path_finder->pathSimplify(grid_path, _path_resolution);
-  // grid_path = _astar_path_finder->getPath();
   
-  // 再次确保简化后的路径第一个点是精确起点
+  // 再次确保第一个点对齐
   if (grid_path.size() > 0) {
     grid_path[0] = exact_start_pt;
   }
@@ -317,7 +335,15 @@ bool trajGeneration() {
 
   // Publish the trajectory
   trajPublish(_polyCoeff, _polyTime);
-  time_traj_start = ros::Time::now();
+
+  // 【!!!】逻辑修正：
+  // 只有在第一次 GEN_NEW_TRAJ 时，我们将开始时间设为 now()
+  // 在 REPLAN_TRAJ 状态下，time_traj_start 已经在 execCallback 里被设为未来时间了
+  // 所以这里不能覆盖它
+  if (exec_state != EXEC_TRAJ && exec_state != REPLAN_TRAJ) {
+    time_traj_start = ros::Time::now(); 
+  }
+  
   if (_polyCoeff.rows() > 0)
     return true;
   else
@@ -354,15 +380,15 @@ void trajOptimization(Eigen::MatrixXd path) {
   
   _polyCoeff =
       _trajGene->PolyQPGeneration(_dev_order, path, vel, acc, _polyTime);
-  // check if the trajectory is safe, if not, do reoptimize
+      // check if the trajectory is safe, if not, do reoptimize
   visTrajectory_before(_polyCoeff, _polyTime);
   int unsafe_segment=-1;
   
   unsafe_segment = _astar_path_finder->safeCheck(_polyCoeff, _polyTime);
   MatrixXd repath;
- bool regen_flag=false;
+  bool regen_flag=false;
   while (unsafe_segment != -1) {
-    
+
     //通过一个循环插入一个新的路径点
     regen_flag=true;
      int count = 0;
@@ -388,8 +414,8 @@ void trajOptimization(Eigen::MatrixXd path) {
     unsafe_segment = _astar_path_finder->safeCheck(_polyCoeff, _polyTime);
   }
   if(regen_flag)
-  cout<<"regeneration of safe path success!"<<endl;
-  // visulize path and trajectory
+    cout<<"regeneration of safe path success!"<<endl;
+    // visulize path and trajectory
   visPath(path);
   visTrajectory(_polyCoeff, _polyTime);
 }
@@ -409,7 +435,13 @@ void trajPublish(MatrixXd polyCoeff, VectorXd time) {
   quadrotor_msgs::PolynomialTrajectory traj_msg;
 
   traj_msg.header.seq = count;
-  traj_msg.header.stamp = ros::Time::now();
+  
+  // 【!!!】重点修改部分：通信协议对齐
+  // 必须使用我们在 execCallback 中精心计算的 time_traj_start
+  // 而不是 ros::Time::now()。
+  // 因为 time_traj_start 包含了 "未来" 的偏移量。
+  traj_msg.header.stamp = time_traj_start; 
+  
   traj_msg.header.frame_id = std::string("world");
   traj_msg.trajectory_id = count;
   traj_msg.action = quadrotor_msgs::PolynomialTrajectory::ACTION_ADD;
@@ -483,8 +515,8 @@ VectorXd timeAllocation(MatrixXd Path) {
   //     }
   //     time(i) *= factor;
   //   }
-  // }
-  return time;
+  // } 
+ return time;
 }
 
 void visTrajectory(MatrixXd polyCoeff, VectorXd time) {
