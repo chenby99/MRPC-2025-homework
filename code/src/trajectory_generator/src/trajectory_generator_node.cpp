@@ -20,6 +20,7 @@
 
 // Useful customized headers
 #include "Astar_searcher.h"
+#include "Theta_star_searcher.h"
 #include "backward.hpp"
 #include "trajectory_generator_waypoint.h"
 
@@ -29,6 +30,8 @@ std::ofstream dataFiles;
 
 TrajectoryGeneratorWaypoint *_trajGene = new TrajectoryGeneratorWaypoint();
 Astarpath *_astar_path_finder = new Astarpath();
+ThetaStarPath *_theta_star_path_finder = new ThetaStarPath();
+string _planning_algorithm = "astar";  // 默认使用A*算法
 
 // Set the obstacle map
 double _resolution, _inv_resolution, _path_resolution;
@@ -190,6 +193,29 @@ void execCallback(const ros::TimerEvent &e) {
     double t_replan = ros::Duration(3, 0).toSec();
     t_cur = min(time_duration, t_cur);
 
+    static int safety_check_count = 0;
+    safety_check_count++;
+    if (safety_check_count >= 10) { // 假设 timer 是 100Hz (0.01s)，这里就是 10Hz
+        safety_check_count = 0;
+        
+        // 调用 A* 或 Theta* 的检查器，检查当前轨迹是否安全
+        // 注意：这里我们检查整条轨迹，或者你可以优化只检查 t_cur 之后的部分
+        int unsafe_segment = -1;
+        
+        if (_planning_algorithm == "thetastar") {
+            unsafe_segment = _theta_star_path_finder->safeCheck(_polyCoeff, _polyTime);
+        } else {
+            unsafe_segment = _astar_path_finder->safeCheck(_polyCoeff, _polyTime);
+        }
+
+        if (unsafe_segment != -1) {
+            ROS_WARN("[Safety] Collision detected in current trajectory! Trigger Replanning!");
+            // 强制切换状态到重规划
+            changeState(REPLAN_TRAJ, "COLLISION_AVOIDANCE");
+            return; // 退出当前循环
+        }
+    }
+
 
     if (t_cur > time_duration - 1e-2) {
       has_target = false;
@@ -276,7 +302,8 @@ void rcvPointCloudCallBack(const sensor_msgs::PointCloud2 &pointcloud_map) {
   pcl::PointCloud<pcl::PointXYZ> cloud;
   sensor_msgs::PointCloud2 map_vis;
 
- _astar_path_finder->resetOccupy();//新的一帧点云到来，需将占据容器清零；
+  _astar_path_finder->resetOccupy();//新的一帧点云到来，需将占据容器清零；
+  _theta_star_path_finder->resetOccupy(); // 同时清空Theta*的障碍物地图
 
   pcl::fromROSMsg(pointcloud_map, cloud);
   
@@ -288,6 +315,7 @@ void rcvPointCloudCallBack(const sensor_msgs::PointCloud2 &pointcloud_map) {
     pt = cloud.points[idx];
     // set obstalces into grid map for path planning
     _astar_path_finder->set_barrier(pt.x, pt.y, pt.z);
+    _theta_star_path_finder->set_barrier(pt.x, pt.y, pt.z);
   }
 }
 
@@ -296,15 +324,29 @@ bool trajGeneration() {
 
   Vector3d exact_start_pt = start_pt;
   
-  bool astar_success =_astar_path_finder->AstarSearch(start_pt, target_pt);
-
-  if(!astar_success){
-     _astar_path_finder->resetUsedGrids();
-    return false;
-    }
+  bool search_success = false;
+  vector<Vector3d> grid_path;
   
-  auto grid_path = _astar_path_finder->getPath();
-  _astar_path_finder->resetUsedGrids();
+  // 根据选择的算法执行路径规划
+  if (_planning_algorithm == "thetastar") {
+    ROS_INFO("[Planning] Using Theta* algorithm");
+    search_success = _theta_star_path_finder->ThetaStarSearch(start_pt, target_pt);
+    if (search_success) {
+      grid_path = _theta_star_path_finder->getPath();
+    }
+    _theta_star_path_finder->resetUsedGrids();
+  } else {
+    ROS_INFO("[Planning] Using A* algorithm");
+    search_success = _astar_path_finder->AstarSearch(start_pt, target_pt);
+    if (search_success) {
+      grid_path = _astar_path_finder->getPath();
+    }
+    _astar_path_finder->resetUsedGrids();
+  }
+
+  if (!search_success) {
+    return false;
+  }
   
   // 确保第一个点对齐
   if (grid_path.size() > 0) {
@@ -318,7 +360,11 @@ bool trajGeneration() {
   visPathA(path);
 
   // 路径简化
-  grid_path = _astar_path_finder->pathSimplify(grid_path, _path_resolution);
+  if (_planning_algorithm == "thetastar") {
+    grid_path = _theta_star_path_finder->pathSimplify(grid_path, _path_resolution);
+  } else {
+    grid_path = _astar_path_finder->pathSimplify(grid_path, _path_resolution);
+  }
   
   // 再次确保第一个点对齐
   if (grid_path.size() > 0) {
@@ -387,19 +433,37 @@ void trajOptimization(Eigen::MatrixXd path) {
   unsafe_segment = _astar_path_finder->safeCheck(_polyCoeff, _polyTime);
   MatrixXd repath;
   bool regen_flag=false;
+
+  // 【新增】防止无限循环的计数器
+  int max_retry = 0;
+
   while (unsafe_segment != -1) {
+    // 【新增】安全刹车：如果尝试太多次，或者本来就是起点问题，就别再加了
+    if (max_retry > 5) {
+        ROS_WARN("Max retry reached in safety check, forcing execution.");
+        break;
+    }
+
+    // 【新增】如果这一段本来就很短，别再分了
+    double segment_len = (path.row(unsafe_segment+1) - path.row(unsafe_segment)).norm();
+    if (segment_len < 1) {
+        ROS_WARN("Segment too short (%.2f), skipping split.", segment_len);
+        // 如果是极短的段还不安全，可能是起点问题，强制忽略
+        break; 
+    }
 
     //通过一个循环插入一个新的路径点
     regen_flag=true;
      int count = 0;
     repath=MatrixXd::Zero(path.rows()+1,path.cols());
+
      while(count<=unsafe_segment)
     {
         repath.row(count)=path.row(count);
         count++;
     }
     repath.row(count)=(path.row(count)+path.row(count-1))/2;
-    cout<<"Add a middle point to avoid collision!"<<endl;
+    // cout<<"Add a middle point to avoid collision!"<<endl;
     while(count<path.rows())
     {
         repath.row(count+1)=path.row(count);
@@ -412,6 +476,8 @@ void trajOptimization(Eigen::MatrixXd path) {
     _polyCoeff = _trajGene->PolyQPGeneration(_dev_order, path, vel, acc, _polyTime);
     // cout<<"new poly coeff is "<<_polyCoeff<<endl;
     unsafe_segment = _astar_path_finder->safeCheck(_polyCoeff, _polyTime);
+
+    max_retry++; // 计数增加
   }
   if(regen_flag)
     cout<<"regeneration of safe path success!"<<endl;
@@ -727,7 +793,7 @@ int main(int argc, char **argv) {
   nh.param("map/x_size", _x_size, 50.0);
   nh.param("map/y_size", _y_size, 50.0);
   nh.param("map/z_size", _z_size, 5.0);
-  nh.param("path/resolution", _path_resolution, 0.05);
+  nh.param("path/resolution", _path_resolution, 0.5);
   nh.param("replanning/thresh_replan", replan_thresh, -1.0);
   nh.param("replanning/thresh_no_replan", no_replan_thresh, -1.0);
   nh.param("planning/demox", demox, 0);
@@ -763,8 +829,16 @@ int main(int argc, char **argv) {
   _max_y_id = (int)(_y_size * _inv_resolution);
   _max_z_id = (int)(_z_size * _inv_resolution);
 
+  // 读取规划算法参数
+  nh.param("planning/algorithm", _planning_algorithm, string("astar"));
+  ROS_INFO("Planning algorithm: %s", _planning_algorithm.c_str());
+  
   _astar_path_finder = new Astarpath();
   _astar_path_finder->begin_grid_map(_resolution, _map_lower, _map_upper,
+                                  _max_x_id, _max_y_id, _max_z_id);
+  
+  _theta_star_path_finder = new ThetaStarPath();
+  _theta_star_path_finder->begin_grid_map(_resolution, _map_lower, _map_upper,
                                   _max_x_id, _max_y_id, _max_z_id);
 
   ros::Rate rate(100);

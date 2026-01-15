@@ -9,6 +9,9 @@
 <arg name="start_y" default=" 1.0"/>
 <arg name="start_z" default=" 2.0"/>
 
+<!-- Planning Algorithm Selection: "astar" or "thetastar" -->
+<arg name="planning_algorithm" default="thetastar"/>
+
 <arg name="sensing_horizon"  default="5.0" />
 <arg name="sensing_rate"     default="30.0"/>
 <arg name="estimation_rate"  default="30.0"/>
@@ -19,6 +22,7 @@
       <remap from="~local_pointcloud" to="/pcl_render_node/local_pointcloud"/> 
       <remap from="~odom"             to="/visual_slam/odom"/>
       
+      <param name="planning/algorithm"          value="$(arg planning_algorithm)"/>
       <param name="planning/vel"                value="3.0"  />
       <param name="planning/acc"                value="2.0"  />
       <param name="planning/dev_order"          value="3"    />
