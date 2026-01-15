@@ -563,25 +563,37 @@ VectorXd timeAllocation(MatrixXd Path) {
         time(i) =2.0 * t + (dist - 2.0 * d) / _Vel;
     }
  }
-  // 依据转角曲率进行时间放大，转角越尖锐越放慢
-  // if (Path.rows() >= 3) {
-  //   for (int i = 0; i < time.size(); ++i) {
-  //     double factor = 1.0;
-  //     if (i > 0 && i + 1 < Path.rows()) {
-  //       Eigen::Vector3d v1 = (Path.row(i) - Path.row(i - 1)).transpose();
-  //       Eigen::Vector3d v2 = (Path.row(i + 1) - Path.row(i)).transpose();
-  //       double n1 = v1.norm();
-  //       double n2 = v2.norm();
-  //       if (n1 > 1e-6 && n2 > 1e-6) {
-  //         double cosang = std::max(-1.0, std::min(1.0, v1.dot(v2) / (n1 * n2)));
-  //         double sharp = 1.0 - cosang; // 直线0，直角~1，折返~2
-  //         // 放大系数，限制在 [1, 1.8]
-  //         factor = std::min(1.8, 1.0 + 0.6 * sharp);
-  //       }
-  //     }
-  //     time(i) *= factor;
-  //   }
-  // } 
+  // 依据转角曲率进行时间放大，转角越尖锐，给的时间越多（飞得越慢）
+  if (Path.rows() >= 3) {
+    for (int i = 0; i < time.size(); ++i) {
+      double factor = 1.0;
+      
+      // 检查当前线段与下一线段的夹角
+      if (i > 0 && i + 1 < Path.rows()) {
+        Eigen::Vector3d v1 = (Path.row(i) - Path.row(i - 1)).transpose();
+        Eigen::Vector3d v2 = (Path.row(i + 1) - Path.row(i)).transpose();
+        double n1 = v1.norm();
+        double n2 = v2.norm();
+        
+        if (n1 > 1e-6 && n2 > 1e-6) {
+          // 计算夹角余弦值
+          double cosang = std::max(-1.0, std::min(1.0, v1.dot(v2) / (n1 * n2)));
+          
+          // sharp: 0(直线) ~ 1(90度) ~ 2(180度掉头)
+          double sharp = 1.0 - cosang; 
+          
+          // 【参数调整建议】
+          // 之前的 factor = 1.0 + 0.6 * sharp 可能太温和了
+          // 建议改成更大一点，比如 1.5 * sharp，让它在转弯时明显减速
+          factor = std::min(4.0, 1.0 + 2.0 * sharp);
+        }
+      }
+      
+      // 将计算出的放大系数应用到当前时间段
+      // 注意：通常我们会把这个惩罚分摊到转角的前后两段
+      time(i) *= factor; 
+    }
+  } 
  return time;
 }
 

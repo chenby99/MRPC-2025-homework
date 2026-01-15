@@ -459,7 +459,7 @@ std::vector<Vector3d> ThetaStarPath::pathSimplify(const std::vector<Vector3d> &p
     Vector3d p_next = path[i+1];        // 下一个点
 
     // 1. 距离过近合并 (去除墙角的密集抖动)
-    if ((p_curr - p_prev).norm() < 0.5) { 
+    if ((p_curr - p_prev).norm() < 0.1) { 
       continue; 
     }
 
@@ -539,7 +539,7 @@ Vector3d ThetaStarPath::getPosPoly(MatrixXd polyCoeff, int k, double t) {
 int ThetaStarPath::safeCheck(MatrixXd polyCoeff, VectorXd time) {
   int unsafe_segment = -1; //-1 -> the whole trajectory is safe
 
-  double delta_t = resolution / 0.2; // conservative advance step size;
+  double delta_t = resolution / 0.5; // conservative advance step size;
   double t = delta_t;
   Vector3d advancePos;
 
